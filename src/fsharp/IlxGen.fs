@@ -2285,19 +2285,19 @@ and GenExprAux (cenv: cenv) (cgbuf: CodeGenBuffer) eenv sp expr sequel =
      // Make sure we generate the sequence point outside the scope of the variable
      let startScope, endScope as scopeMarks = StartDelayedLocalScope "let" cgbuf
      let eenv = AllocStorageForBind cenv cgbuf scopeMarks eenv bind
-     let spBind = GenSequencePointForBind cenv cgbuf bind
-     GenBindingAfterSequencePoint cenv cgbuf eenv spBind bind false (Some startScope)
+     let spBind = GenDebugPointForBind cenv cgbuf bind
+     GenBindingAfterDebugPoint cenv cgbuf eenv spBind bind false (Some startScope)
 
      // Work out if we need a sequence point for the body. For any "user" binding then the body gets SPAlways.
      // For invisible compiler-generated bindings we just use "sp", unless its body is another invisible binding
      // For sticky bindings arising from inlining we suppress any immediate sequence point in the body
      let spBody =
-        match bind.SequencePointInfo with
-        | SequencePointAtBinding _
-        | NoSequencePointAtLetBinding
-        | NoSequencePointAtDoBinding -> SPAlways
-        | NoSequencePointAtInvisibleBinding -> sp
-        | NoSequencePointAtStickyBinding -> SPSuppress
+        match bind.DebugPoint with
+        | DebugPointAtBinding _
+        | NoDebugPointAtLetBinding
+        | NoDebugPointAtDoBinding -> SPAlways
+        | NoDebugPointAtInvisibleBinding -> sp
+        | NoDebugPointAtStickyBinding -> SPSuppress
     
      // Generate the body
      GenExpr cenv cgbuf eenv spBody body (EndLocalScope(sequel, endScope))

@@ -4259,7 +4259,7 @@ type DecisionTreeTest =
 /// A target of a decision tree. Can be thought of as a little function, though is compiled as a local block. 
 [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
 type DecisionTreeTarget = 
-    | TTarget of Val list * Expr * SequencePointInfoForTarget * isStateVarFlags: bool list option
+    | TTarget of Val list * Expr * DebugPointForTarget * isStateVarFlags: bool list option
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()

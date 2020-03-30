@@ -921,8 +921,8 @@ let RepresentBindingAsStateVar (bind: Binding) (res2: StateMachineConversionFirs
     let (TBind(v, e, sp)) = bind
     let sp, spm =
         match sp with
-        | SequencePointAtBinding m -> SequencePointsAtSeq, m
-        | _ -> SuppressSequencePointOnExprOfSequential, e.Range
+        | DebugPointAtBinding m -> DebugPointAtSequential.Both, m
+        | _ -> DebugPointAtSequential.StmtOnly, e.Range
     let vref = mkLocalValRef v
     { res2 with
         phase1 = mkSequential sp m (mkValSet spm vref e) res2.phase1
@@ -1021,7 +1021,7 @@ let ConvertStateMachineExprToObject g overallExpr =
         // let __machine_step$cont = e1 in e2
         // The $cont is used to prevent elimination in Optimizer.fs
         | Expr.Let(bind, e2, m, _) when bind.Var.CompiledName(g.CompilerGlobalState) = "__machine_step$cont" ->
-            Some (bind.Expr, e2, m, (fun e1 e2 -> mkLet bind.SequencePointInfo m bind.Var e1 e2))
+            Some (bind.Expr, e2, m, (fun e1 e2 -> mkLet bind.DebugPoint m bind.Var e1 e2))
 
         | _ -> None
 
@@ -1242,8 +1242,8 @@ let ConvertStateMachineExprToObject g overallExpr =
             expr
         else
             let initLabel = IL.generateCodeLabel()
-            let mbuilder = new MatchBuilder(NoSequencePointAtInvisibleBinding, m )
-            let mkGotoLabelTarget lab = mbuilder.AddResultTarget(Expr.Op (TOp.Goto lab, [], [], m), SuppressSequencePointAtTarget)
+            let mbuilder = new MatchBuilder(NoDebugPointAtInvisibleBinding, m )
+            let mkGotoLabelTarget lab = mbuilder.AddResultTarget(Expr.Op (TOp.Goto lab, [], [], m), DebugPointForTarget.No)
             let dtree =
                 TDSwitch(pcExpr,
                         [   // Yield one target for each PC, where the action of the target is to goto the appropriate label
@@ -1283,7 +1283,7 @@ let ConvertStateMachineExprToObject g overallExpr =
                 let m = someBranchExpr.Range
                 let recreate reenterLabOpt e1 e2 = 
                     let lab = (match reenterLabOpt with Some l -> l | _ -> IL.generateCodeLabel())
-                    mkCond NoSequencePointAtStickyBinding SuppressSequencePointAtTarget  m (tyOfExpr g noneBranchExpr) (mkFalse g m) (mkLabelled m lab e1) e2
+                    mkCond NoDebugPointAtStickyBinding DebugPointForTarget.No  m (tyOfExpr g noneBranchExpr) (mkFalse g m) (mkLabelled m lab e1) e2
 
                 { phase1 = recreate None resNone.phase1 resSome.phase1
                   phase2 = (fun ctxt ->
@@ -1497,7 +1497,7 @@ let ConvertStateMachineExprToObject g overallExpr =
 
                 // Rewrite the expression on the r.h.s. of the binding
                 let bindExpr = ConvertStateMachineLeafExpression env bind.Expr
-                let bind = mkBind bind.SequencePointInfo bind.Var bindExpr
+                let bind = mkBind bind.DebugPoint bind.Var bindExpr
                 if sm_verbose then printfn "LetExpr (non-control-flow, body)" 
 
                 let resBody = ConvertStateMachineCode env pcExprOpt bodyExpr

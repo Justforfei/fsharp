@@ -5555,7 +5555,7 @@ let rec remarkExpr m x =
 
     | Expr.Match (_, _, pt, targets, _, ty) ->
         let targetsR = targets |> Array.map (fun (TTarget(vs, e, _, flags)) -> TTarget(vs, remarkExpr m e, DebugPointForTarget.No, flags))
-        primMkMatch (NoSequencePointAtInvisibleBinding, m, remarkDecisionTree m pt, targetsR, m, ty)
+        primMkMatch (NoDebugPointAtInvisibleBinding, m, remarkDecisionTree m pt, targetsR, m, ty)
 
     | Expr.Val (x, valUseFlags, _) ->
         Expr.Val (x, valUseFlags, m)
@@ -8087,7 +8087,7 @@ let mkIsInstConditional g m tgty vinpe v e2 e3 =
         mkCompGenLet m v (mkIsInst tgty vinpe m) expr
 
     else
-        let mbuilder = new MatchBuilder(NoSequencePointAtInvisibleBinding, m)
+        let mbuilder = new MatchBuilder(NoDebugPointAtInvisibleBinding, m)
         let tg2 = TDSuccess([mkCallUnbox g m tgty vinpe], mbuilder.AddTarget(TTarget([v], e2, DebugPointForTarget.No, None)))
         let tg3 = mbuilder.AddResultTarget(e3, DebugPointForTarget.No)
         let dtree = TDSwitch(vinpe, [TCase(DecisionTreeTest.IsInst(tyOfExpr g vinpe, tgty), tg2)], Some tg3, m)
