@@ -2,19 +2,22 @@
 
 module internal FSharp.Compiler.Infos
 
+open System
+open FSharp.Compiler
 open FSharp.Compiler.AbstractIL
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.Internal.Library
-open FSharp.Compiler
-open FSharp.Compiler.Range
-open FSharp.Compiler.Ast
 open FSharp.Compiler.ErrorLogger
-open FSharp.Compiler.Tast
-open FSharp.Compiler.Tastops
-open FSharp.Compiler.Tastops.DebugPrint
-open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.Lib
-open Microsoft.FSharp.Core.Printf
+open FSharp.Compiler.Range
+open FSharp.Compiler.SyntaxTree
+open FSharp.Compiler.SyntaxTreeOps
+open FSharp.Compiler.TypedTree
+open FSharp.Compiler.TypedTreeBasics
+open FSharp.Compiler.TypedTreeOps
+open FSharp.Compiler.TypedTreeOps.DebugPrint
+open FSharp.Compiler.TcGlobals
+open FSharp.Compiler.XmlDoc
 
 #if !NO_EXTENSIONTYPING
 open FSharp.Compiler.ExtensionTyping
@@ -1483,10 +1486,10 @@ type MethInfo =
         | ProvidedMeth(amap, mi, _, _) ->
             // A single group of tupled arguments
             [ [for p in mi.PApplyArray((fun mi -> mi.GetParameters()), "GetParameters", m) do
-                let isParamArrayArg = p.PUntaint((fun px -> (px :> IProvidedCustomAttributeProvider).GetAttributeConstructorArgs(p.TypeProvider.PUntaintNoFailure id, typeof<System.ParamArrayAttribute>.FullName).IsSome), m)
+                let isParamArrayArg = p.PUntaint((fun px -> (px :> IProvidedCustomAttributeProvider).GetAttributeConstructorArgs(p.TypeProvider.PUntaintNoFailure id, typeof<ParamArrayAttribute>.FullName).IsSome), m)
                 let optArgInfo =  OptionalArgInfoOfProvidedParameter amap m p
                 let reflArgInfo =
-                    match p.PUntaint((fun px -> (px :> IProvidedCustomAttributeProvider).GetAttributeConstructorArgs(p.TypeProvider.PUntaintNoFailure id, typeof<Microsoft.FSharp.Core.ReflectedDefinitionAttribute>.FullName)), m) with
+                    match p.PUntaint((fun px -> (px :> IProvidedCustomAttributeProvider).GetAttributeConstructorArgs(p.TypeProvider.PUntaintNoFailure id, typeof<ReflectedDefinitionAttribute>.FullName)), m) with
                     | Some ([ Some (:? bool as b) ], _) -> ReflectedArgInfo.Quote b
                     | Some _ -> ReflectedArgInfo.Quote false
                     | None -> ReflectedArgInfo.None
@@ -1767,7 +1770,7 @@ type ILFieldInfo =
 /// Describes an F# use of a field in an F#-declared record, class or struct type
 [<NoComparison; NoEquality>]
 type RecdFieldInfo =
-    | RecdFieldInfo of TypeInst * Tast.RecdFieldRef
+    | RecdFieldInfo of TypeInst * RecdFieldRef
 
     /// Get the generic instantiation of the declaring type of the field
     member x.TypeInst = let (RecdFieldInfo(tinst, _)) = x in tinst
@@ -1804,7 +1807,7 @@ type RecdFieldInfo =
 /// Describes an F# use of a union case
 [<NoComparison; NoEquality>]
 type UnionCaseInfo =
-    | UnionCaseInfo of TypeInst * Tast.UnionCaseRef
+    | UnionCaseInfo of TypeInst * UnionCaseRef
 
     /// Get the list of types for the instantiation of the type parameters of the declaring type of the union case
     member x.TypeInst = let (UnionCaseInfo(tinst, _)) = x in tinst

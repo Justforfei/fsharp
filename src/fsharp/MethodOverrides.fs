@@ -5,19 +5,21 @@ module internal FSharp.Compiler.MethodOverrides
 
 open FSharp.Compiler 
 open FSharp.Compiler.AbstractIL.Internal.Library 
-open FSharp.Compiler.Ast
+open FSharp.Compiler.AccessibilityLogic
 open FSharp.Compiler.ErrorLogger
+open FSharp.Compiler.InfoReader
 open FSharp.Compiler.Lib
 open FSharp.Compiler.Infos
-open FSharp.Compiler.AccessibilityLogic
+open FSharp.Compiler.Features
 open FSharp.Compiler.NameResolution
 open FSharp.Compiler.Range
-open FSharp.Compiler.InfoReader
-open FSharp.Compiler.Tast
-open FSharp.Compiler.Tastops
+open FSharp.Compiler.SyntaxTree
+open FSharp.Compiler.SyntaxTreeOps
 open FSharp.Compiler.TcGlobals
+open FSharp.Compiler.TypedTree
+open FSharp.Compiler.TypedTreeBasics
+open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TypeRelations
-open FSharp.Compiler.Features
 
 //-------------------------------------------------------------------------
 // Completeness of classes
@@ -277,7 +279,6 @@ module DispatchSlotChecking =
             |> NameMultiMap.find  dispatchSlot.LogicalName  
             |> List.exists (OverrideImplementsDispatchSlot g amap m dispatchSlot)
 
-
     /// Check all dispatch slots are implemented by some override.
     let CheckDispatchSlotsAreImplemented (denv, infoReader: InfoReader, m,
                                           nenv, sink: TcResultsSink,
@@ -320,7 +321,7 @@ module DispatchSlotChecking =
             | [ovd] -> 
                 if not ovd.IsCompilerGenerated then 
                     let item = Item.MethodGroup(ovd.LogicalName, [dispatchSlot],None)
-                    CallNameResolutionSink sink (ovd.Range, nenv, item,item, dispatchSlot.FormalMethodTyparInst, ItemOccurence.Implemented, AccessorDomain.AccessibleFromSomewhere)
+                    CallNameResolutionSink sink (ovd.Range, nenv, item, dispatchSlot.FormalMethodTyparInst, ItemOccurence.Implemented, AccessorDomain.AccessibleFromSomewhere)
             | [] -> 
                 if not reqdSlot.IsOptional &&
                    // Check that no available prior override implements this dispatch slot
@@ -821,13 +822,6 @@ module DispatchSlotChecking =
                 
             overrideBy.MemberInfo.Value.ImplementedSlotSigs <- overriden)
 
-
-
-//-------------------------------------------------------------------------
-// "Type Completion" inference and a few other checks at the end of the inference scope
-//------------------------------------------------------------------------- 
-
-
 /// "Type Completion" inference and a few other checks at the end of the inference scope
 let FinalTypeDefinitionChecksAtEndOfInferenceScope (infoReader: InfoReader, nenv, sink, isImplementation, denv) (tycon: Tycon) =
 
@@ -874,7 +868,6 @@ let FinalTypeDefinitionChecksAtEndOfInferenceScope (infoReader: InfoReader, nenv
 
         if hasExplicitObjectEqualsOverride && not hasExplicitObjectGetHashCode then 
             warning(Error(FSComp.SR.typrelExplicitImplementationOfEquals(tycon.DisplayName), m)) 
-
 
         // remember these values to ensure we don't generate these methods during codegen 
         tcaug.SetHasObjectGetHashCode hasExplicitObjectGetHashCode
