@@ -49,11 +49,11 @@ type SyncMachineStruct<'TOverall> =
     interface IAsyncStateMachine with 
         member sm.MoveNext() = failwith "no dynamic impl"
         member sm.SetStateMachine(state: IAsyncStateMachine) = failwith "no dynamic impl"
-(*
+
 module ResumableObject_OuterConditional =
 
     // RO with outer "if __useResumableCode then" conditional
-    let sm1 = 
+    let makeStateMachine() = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -62,10 +62,10 @@ module ResumableObject_OuterConditional =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableObject_OuterConditional" sm1 1
+    check "ResumableObject_OuterConditional" (makeStateMachine()) 1
 
 module ResumableObject_SimpleImmediateExpression =
-    let sm2 = 
+    let makeStateMachine()  = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -76,10 +76,10 @@ module ResumableObject_SimpleImmediateExpression =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableObject_SimpleImmediateExpression" sm2 1
+    check "ResumableObject_SimpleImmediateExpression" (makeStateMachine()) 1
 
 module ResumableObject_FreeVariable =
-    let make3 x = 
+    let makeStateMachine x = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -90,11 +90,11 @@ module ResumableObject_FreeVariable =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    let sm3 = make3 3
-    check "ResumableObject_FreeVariable" (make3 3) 4
+    let sm3 = makeStateMachine 3
+    check "ResumableObject_FreeVariable" (makeStateMachine 3) 4
 
 module ResumableObject_WithoutStart =
-    let make3 x = 
+    let makeStateMachine x = 
         if __useResumableCode then
             __resumableObject
                 { new SyncMachine<int>() with 
@@ -103,11 +103,11 @@ module ResumableObject_WithoutStart =
                         1 + x }
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    let sm3 = make3 3
+    let sm3 = makeStateMachine 3
     check "ResumableObject_WithoutStart" (sm3.Start()) 4
 
 module ResumableObject_OuterLet =
-    let make x = 
+    let makeStateMachine x = 
         // TEST: a resumable object may be just after a non-macro 'let'
         let rnd = System.Random().Next(4)
         if __useResumableCode then
@@ -119,10 +119,10 @@ module ResumableObject_OuterLet =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableObject_OuterLet" (make 4) 4
+    check "ResumableObject_OuterLet" (makeStateMachine 4) 4
 
 module ResumableCode_Macro1 =
-    let make y = 
+    let makeStateMachine y = 
         // TEST: resumable object may declare macros
         let __expand_code x = x + 1
         if __useResumableCode then
@@ -135,10 +135,10 @@ module ResumableCode_Macro1 =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_Macro1" (make 3) 4
+    check "ResumableCode_Macro1" (makeStateMachine 3) 4
 
 module ResumableCode_Macro2 =
-    let make y = 
+    let makeStateMachine y = 
         if __useResumableCode then
             // TEST: resumable object may declare macros
             let __expand_code x = x + 1
@@ -151,10 +151,10 @@ module ResumableCode_Macro2 =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_Macro2" (make 3) 4
+    check "ResumableCode_Macro2" (makeStateMachine 3) 4
 
 module ResumableCode_Macro3 =
-    let make y = 
+    let makeStateMachine y = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -167,10 +167,10 @@ module ResumableCode_Macro3 =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_Macro3" (make 3) 4
+    check "ResumableCode_Macro3" (makeStateMachine 3) 4
 
 module ResumableCode_TwoMacro =
-    let make y = 
+    let makeStateMachine y = 
         // TEST: resumable object may declare macros
         let __expand_code1 x = x + 1
         let __expand_code2 x = __expand_code1 x + 2
@@ -184,10 +184,10 @@ module ResumableCode_TwoMacro =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_TwoMacro" (make 3) 6
+    check "ResumableCode_TwoMacro" (makeStateMachine 3) 6
 
 module ResumableCode_Let =
-    let make x = 
+    let makeStateMachine x = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -199,12 +199,12 @@ module ResumableCode_Let =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCodeLet" (make 3) -2
+    check "ResumableCodeLet" (makeStateMachine 3) -2
 
 #if NEGATIVE
 // Resumable code may NOT have let rec statements
 module ResumableCode_LetRec =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -215,11 +215,11 @@ module ResumableCode_LetRec =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "vwepojwve" (make 13) 32
+    check "vwepojwve" (makeStateMachine 13) 32
 #endif
 
 module ResumableCode_Sequential =
-    let make y = 
+    let makeStateMachine y = 
         let __expand_code1 () = printfn "step1" 
         let __expand_code2 x = x + 2
         if __useResumableCode then
@@ -234,10 +234,10 @@ module ResumableCode_Sequential =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_Sequential" (make 3) 5
+    check "ResumableCode_Sequential" (makeStateMachine 3) 5
 
 module ResumableCode_Sequential2 =
-    let make y = 
+    let makeStateMachine y = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -249,10 +249,10 @@ module ResumableCode_Sequential2 =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_Sequential2" (make 3) 5
+    check "ResumableCode_Sequential2" (makeStateMachine 3) 5
 
 module ResumableCode_ResumeAt0 =
-    let make y = 
+    let makeStateMachine y = 
         // TEST: resumable object may declare macros
         if __useResumableCode then
             (__resumableObject
@@ -273,10 +273,10 @@ module ResumableCode_ResumeAt0 =
                             20+y }).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_ResumeAt0" (make 3) 13
+    check "ResumableCode_ResumeAt0" (makeStateMachine 3) 13
 
 module ResumableCode_ResumeAt1 =
-    let make y = 
+    let makeStateMachine y = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -297,14 +297,14 @@ module ResumableCode_ResumeAt1 =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_ResumeAt1" (make 3) 23
+    check "ResumableCode_ResumeAt1" (makeStateMachine 3) 23
 
 
 // Resumptions must use byrefs taking the 'this' pointer of the struct state machine. Nothing else is allowed.
 // TODO: negative check for code that violates this.
 module ResumableCode_Struct =
     let mutable res = 0
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             __resumableStruct<SyncMachineStruct<int>, int>
                 (MoveNextMethod<SyncMachineStruct<int>>(fun sm -> 
@@ -337,7 +337,7 @@ module ResumableCode_Struct =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_Struct" (make 400) 420
+    check "ResumableCode_Struct" (makeStateMachine 400) 420
 
 
 // Resumptions must use byrefs taking the 'this' pointer of the struct state machine. Nothing else is allowed.
@@ -345,7 +345,7 @@ module ResumableCode_Struct =
 module ResumableCode_StructMacro =
     type CodeSpec = delegate of byref<SyncMachineStruct<int>> -> unit
     let mutable res = 0
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         
         // This approximately simualtes the code you get from Task.Delaylet __expand_code  = 
         let __expand_code = 
@@ -369,10 +369,10 @@ module ResumableCode_StructMacro =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_StructMacro" (make 400) 420
+    check "ResumableCode_StructMacro" (makeStateMachine 400) 420
 
 module ResumableCode_FSharpFuncBetaReduction =
-    let make x = 
+    let makeStateMachine x = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -384,10 +384,10 @@ module ResumableCode_FSharpFuncBetaReduction =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_FSharpFuncBetaReduction" (make 3) 4
-    *)
+    check "ResumableCode_FSharpFuncBetaReduction" (makeStateMachine 3) 4
+    
 module ResumableCode_FSharpFuncBetaReductionWithMacroAndResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -410,12 +410,11 @@ module ResumableCode_FSharpFuncBetaReductionWithMacroAndResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_FSharpFuncBetaReductionWithMacroAndResumption" (make 3) 23
+    check "ResumableCode_FSharpFuncBetaReductionWithMacroAndResumption" (makeStateMachine 3) 23
 
-(*
 module ResumableCode_FSharpFuncBetaReductionWithParameterisedMacroAndResumption1 =
     let mutable res = 0
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -441,42 +440,38 @@ module ResumableCode_FSharpFuncBetaReductionWithParameterisedMacroAndResumption1
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_FSharpFuncBetaReductionWithParameterisedMacroAndResumption1" (make 3) 346
+    check "ResumableCode_FSharpFuncBetaReductionWithParameterisedMacroAndResumption1" (makeStateMachine 3) 346
 
 
 module ResumableCode_FSharpFuncBetaReductionWithParameterisedMacroAndResumption2 =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
                     member __.Step ()  =  
-                       __resumeAt 1
-                       failwith "unreachable in this test"
+                       __resumeAt 0
                        // TEST: a resumable object may contain a macro defining beta-reducible code with a resumption point
                        let __expand_code n = (fun () -> 
                             // Specify a resumption point
-                            failwith "unreachable in this test"
                             match __resumableEntry() with
                             | Some contID ->
-                                // This is the suspension path. It is not executed in this test because we jump straight to label 1
-                                failwith "unreachable in this test"
-                                666
+                                // This is the suspension path. It is executed in this test and we jump straight to label 1
+                                __resumeAt contID
                             | None -> 
                                 // This is the resumption path
-                                // Label 1 goes here.  Note 'n' is zero initialised when we jump here in this test so the
-                                // answer is 23, not 123
-                                20+inputValue+n)
+                                // Label 1 goes here.  
+                                // Answer is 20 + 833 + 100
+                                20 + inputValue + n)
                        (__expand_code 100) ()
                }
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_FSharpFuncBetaReductionWithParameterisedMacroAndResumption2" (make 3) 23
-
+    check "ResumableCode_FSharpFuncBetaReductionWithParameterisedMacroAndResumption2" (makeStateMachine 833) (20 + 833 + 100)
 
 module ResumableCode_DelegateBetaReduction =
-    let make x = 
+    let makeStateMachine x = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -488,12 +483,12 @@ module ResumableCode_DelegateBetaReduction =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_DelegateBetaReduction" (make 3) 9
+    check "ResumableCode_DelegateBetaReduction" (makeStateMachine 3) 9
 
 module ResumableCode_ByrefDelegateBetaReduction =
     type CodeSpec = delegate of byref<int> -> unit
     let mutable res = 0
-    let make x = 
+    let makeStateMachine x = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -507,14 +502,14 @@ module ResumableCode_ByrefDelegateBetaReduction =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_ByrefDelegateBetaReduction" (make 3) 10
+    check "ResumableCode_ByrefDelegateBetaReduction" (makeStateMachine 3) 10
 
 // Resumptions must use byrefs taking the 'this' pointer of the struct state machine. Nothing else is allowed.
 // TODO: negative check+test for code that violates this.
 module ResumableCode_ByrefDelegateBetaReductionWithResumption =
     type CodeSpec = delegate of byref<SyncMachineStruct<int>> -> unit
     let mutable res = 0
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             __resumableStruct<SyncMachineStruct<int>, int>
                 (MoveNextMethod<SyncMachineStruct<int>>(fun sm -> 
@@ -548,10 +543,10 @@ module ResumableCode_ByrefDelegateBetaReductionWithResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_ByrefDelegateBetaReductionWithResumption" (make 400) 1520
+    check "ResumableCode_ByrefDelegateBetaReductionWithResumption" (makeStateMachine 400) 1520
 
 module ResumableCode_Conditional =
-    let make x = 
+    let makeStateMachine x = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -562,10 +557,10 @@ module ResumableCode_Conditional =
             ).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "ResumableCode_Conditional" (make 3) -2
+    check "ResumableCode_Conditional" (makeStateMachine 3) -2
 
 module ResumableCode_TryWithNoResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -579,10 +574,10 @@ module ResumableCode_TryWithNoResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryWithNoResumption" (make 13) 23
+    check "ResumableCode_TryWithNoResumption" (makeStateMachine 13) 23
 
 module ResumableCode_TryWithResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -604,10 +599,10 @@ module ResumableCode_TryWithResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryWithResumption" (make 13) 33
+    check "ResumableCode_TryWithResumption" (makeStateMachine 13) 33
 
 module ResumableCode_TryWithResumptionException =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -631,10 +626,10 @@ module ResumableCode_TryWithResumptionException =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryWithResumptionException" (make 13) 25
+    check "ResumableCode_TryWithResumptionException" (makeStateMachine 13) 25
 
 module ResumableCode_TryWithExceptionNoResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -646,10 +641,10 @@ module ResumableCode_TryWithExceptionNoResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryWithExceptionNoResumption" (make 13) 25
+    check "ResumableCode_TryWithExceptionNoResumption" (makeStateMachine 13) 25
 
 module ResumableCode_TryFinallyNoResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -664,14 +659,14 @@ module ResumableCode_TryFinallyNoResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryFinallyNoResumption" (make 13) 53
+    check "ResumableCode_TryFinallyNoResumption" (makeStateMachine 13) 53
 
 #if NEGATIVE
 // try-finally may **not** contain resumption points.  This is because it's 
 // very difficult to codegen them in IL. Instead you have to code try/finally logic as shown in next test.
 // 
 module ResumableCode_TryFinallyResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -698,14 +693,14 @@ module ResumableCode_TryFinallyResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryFinallyResumption" (make 13) 43
+    check "ResumableCode_TryFinallyResumption" (makeStateMachine 13) 43
 #endif
 
 // try-finally may **not** contain resumption points.  This is because it's 
 // very difficult to codegen them in IL. Instead you have to code try/finally logic as shown below.
 // See also tasks.fs.
 module ResumableCode_TryFinallySimulatedResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -738,11 +733,11 @@ module ResumableCode_TryFinallySimulatedResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryFinallySimulatedResumption" (make 13) 43
+    check "ResumableCode_TryFinallySimulatedResumption" (makeStateMachine 13) 43
 
 module ResumableCode_TryFinallyExceptionNoResumption =
     let mutable res = 0
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -755,10 +750,10 @@ module ResumableCode_TryFinallyExceptionNoResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_TryFinallyExceptionNoResumption" (try make 13 with _ -> res ) 23
+    check "ResumableCode_TryFinallyExceptionNoResumption" (try makeStateMachine 13 with _ -> res ) 23
 
 module ResumableCode_WhileLoopNoResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -771,10 +766,10 @@ module ResumableCode_WhileLoopNoResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_WhileLoopNoResumption" (make 13) 35
+    check "ResumableCode_WhileLoopNoResumption" (makeStateMachine 13) 35
 
 module ResumableCode_WhileLoopWithResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -800,11 +795,11 @@ module ResumableCode_WhileLoopWithResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_WhileLoopWithResumption" (make 13) 203
+    check "ResumableCode_WhileLoopWithResumption" (makeStateMachine 13) 203
 
 
 module ResumableCode_ForLoopNoResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -817,12 +812,12 @@ module ResumableCode_ForLoopNoResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_ForLoopNoResumption" (make 13) 35
+    check "ResumableCode_ForLoopNoResumption" (makeStateMachine 13) 35
 
 #if NEGATIVE
 // For loops may not contain resumption points.  You have to code it as a while loop.
 module ResumableCode_ForLoopWithResumption =
-    let make inputValue = 
+    let makeStateMachine inputValue = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -848,12 +843,12 @@ module ResumableCode_ForLoopWithResumption =
         else
             failwith "should have been compiled to resumable code, no interpretation available"
 
-    check "ResumableCode_ForLoopWithResumption" (make 13) 203
+    check "ResumableCode_ForLoopWithResumption" (makeStateMachine 13) 203
 #endif
 
 
 module ResumableCode_ResumeAtIntoConditional =
-    let make y = 
+    let makeStateMachine y = 
         if __useResumableCode then
             (__resumableObject
                 { new SyncMachine<int>() with 
@@ -874,7 +869,7 @@ module ResumableCode_ResumeAtIntoConditional =
                             30 + y }).Start()
         else
             failwith "should have been compiled to resumable code, no interpretation available"
-    check "vewowevewoi" (make 13) 33
+    check "vewowevewoi" (makeStateMachine 13) 33
 
 module SyncTest =
     open Tests.SyncBuilder
@@ -927,7 +922,7 @@ module TaskCompilationSmokeTests =
             let! res10 = syncTask()
             return res1 + res2 + res3 + res4 + res5 + res6 + res7 + res8 + res9 + res10
          }
-*)
+
 #if TESTS_AS_APP
 let RUN() = !failures
 #else
