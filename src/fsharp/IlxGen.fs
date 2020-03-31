@@ -25,6 +25,7 @@ open FSharp.Compiler.Infos
 open FSharp.Compiler.Import
 open FSharp.Compiler.Layout
 open FSharp.Compiler.Lib
+open FSharp.Compiler.LowerCallsAndSeqs
 open FSharp.Compiler.PrettyNaming
 open FSharp.Compiler.Range
 open FSharp.Compiler.SyntaxTree
@@ -2240,31 +2241,37 @@ and GenExprWithStackGuard cenv cgbuf eenv sp expr sequel =
     | :? System.InsufficientExecutionStackException ->
         error(InternalError(sprintf "Expression is too large and/or complex to emit. Method name: '%s'. Recursive depth: %i." cgbuf.MethodName cenv.exprRecursionDepth, expr.Range))
 
+/// Process the debug point and check for alternative ways to generate this expression.
+/// Returns 'true' if the expression was processed by alternative means.
+and GenExprPreSteps (cenv: cenv) (cgbuf: CodeGenBuffer) eenv sp expr sequel =
+    ProcessDebugPointForExpr cenv cgbuf sp expr
+
+    // This part of the GenExprAux may apply because a 'let' expression can be a state machine expressions.
+    match (if IsPossibleStateMachineExpr cenv.g expr then ConvertStateMachineExprToObject cenv.g expr else None) with
+    | Some res ->
+        match res with 
+        | Choice1Of2 objExpr ->
+             GenExpr cenv cgbuf eenv sp objExpr sequel
+             true
+        | Choice2Of2 (structTy, stateVars, thisVars, moveNextMethodThisVar, moveNextExprWithJumpTable, setMachineStateBodyExpr, afterMethodThisVar, afterMethodBodyExpr) -> 
+             GenStructStateMachine cenv cgbuf eenv (structTy, stateVars, thisVars, moveNextMethodThisVar, moveNextExprWithJumpTable, setMachineStateBodyExpr, afterMethodThisVar, afterMethodBodyExpr) sequel
+             true
+    | None ->
+
+    // This part of the GenExprAux may apply because a 'match' expression can be a 'if __useResumableCode ...' expression
+    match expr with
+    | IfUseResumableCodeExpr cenv.g (_, elseExpr) -> 
+        GenExpr cenv cgbuf eenv sp elseExpr sequel
+        true
+    | _ ->
+        false
+
 and GenExprAux (cenv: cenv) (cgbuf: CodeGenBuffer) eenv sp expr sequel =
   let g = cenv.g
   let expr = stripExpr expr
 
-  ProcessDebugPointForExpr cenv cgbuf sp expr
-
-  // A sequence expression will always match Expr.App.
-  match (if compileSequenceExpressions then LowerCallsAndSeqs.ConvertSequenceExprToObject g cenv.amap expr else None) with
-  | Some info ->
-      GenSequenceExpr cenv cgbuf eenv info sequel
-  | None ->
-
-  match LowerCallsAndSeqs.ConvertStateMachineExprToObject g expr with
-  | Some res ->
-      match res with 
-      | Choice1Of2 objExpr -> GenExpr cenv cgbuf eenv sp objExpr sequel
-      | Choice2Of2 (structTy, stateVars, thisVars, moveNextMethodThisVar, moveNextExprWithJumpTable, setMachineStateBodyExpr, afterMethodThisVar, afterMethodBodyExpr) -> 
-           GenStructStateMachine cenv cgbuf eenv (structTy, stateVars, thisVars, moveNextMethodThisVar, moveNextExprWithJumpTable, setMachineStateBodyExpr, afterMethodThisVar, afterMethodBodyExpr) sequel
-  | None ->
-
-  // Eliminate 'if useResumableCode ...'
-  match expr with
-  | IfGenerateCompiledStateMachinesExpr g (_, elseExpr) -> 
-      GenExprAux cenv cgbuf eenv sp elseExpr sequel
-  | _ ->
+  // Process the debug point and see if there's a replacement technique to process this expression
+  if GenExprPreSteps cenv cgbuf eenv sp expr sequel then () else
 
   match expr with
   // Most generation of linear expressions is implemented routinely using tailcalls and the correct sequels.
@@ -2274,7 +2281,7 @@ and GenExprAux (cenv: cenv) (cgbuf: CodeGenBuffer) eenv sp expr sequel =
   | Expr.Let _
   | LinearOpExpr _ 
   | Expr.Match _ -> 
-      GenLinearExpr cenv cgbuf eenv sp expr sequel (* canProcessDebugPoint *) false id |> ignore<FakeUnit>
+      GenLinearExpr cenv cgbuf eenv sp expr sequel (* preSteps *) false id |> ignore<FakeUnit>
 
   | Expr.Const (c, m, ty) ->
       GenConstant cenv cgbuf eenv (c, m, ty) sequel
@@ -2639,13 +2646,15 @@ and GenAllocUnionCase cenv cgbuf eenv (c,tyargs,args,m) sequel =
     GenAllocUnionCaseCore cenv cgbuf eenv (c,tyargs,args.Length,m)
     GenSequel cenv eenv.cloc cgbuf sequel
 
-and GenLinearExpr cenv cgbuf eenv sp expr sequel canProcessDebugPoint (contf: FakeUnit -> FakeUnit) =
+and GenLinearExpr cenv cgbuf eenv sp expr sequel preSteps (contf: FakeUnit -> FakeUnit) =
     let expr = stripExpr expr
+
     match expr with 
     | Expr.Sequential (e1, e2, specialSeqFlag, spSeq, _) ->
-        if canProcessDebugPoint then
-            ProcessDebugPointForExpr cenv cgbuf sp expr
+        // Process the debug point and see if there's a replacement technique to process this expression
+        if preSteps && GenExprPreSteps cenv cgbuf eenv sp expr sequel then contf Fake else
 
+        // preSteps = run the initial processing from GenExprAux on the expression.
         // Compiler generated sequential executions result in suppressions of sequence points on both
         // left and right of the sequence
         let spAction, spExpr =
@@ -2656,7 +2665,7 @@ and GenLinearExpr cenv cgbuf eenv sp expr sequel canProcessDebugPoint (contf: Fa
         match specialSeqFlag with
         | NormalSeq ->
             GenExpr cenv cgbuf eenv spAction e1 discard
-            GenLinearExpr cenv cgbuf eenv spExpr e2 sequel (* canProcessDebugPoint *) true contf
+            GenLinearExpr cenv cgbuf eenv spExpr e2 sequel true contf
         | ThenDoSeq ->
             GenExpr cenv cgbuf eenv spExpr e1 Continue
             GenExpr cenv cgbuf eenv spAction e2 discard
@@ -2664,8 +2673,7 @@ and GenLinearExpr cenv cgbuf eenv sp expr sequel canProcessDebugPoint (contf: Fa
             contf Fake
 
     | Expr.Let (bind, body, _, _) ->
-        if canProcessDebugPoint then
-            ProcessDebugPointForExpr cenv cgbuf sp expr
+        if preSteps && GenExprPreSteps cenv cgbuf eenv sp expr sequel then contf Fake else
 
         // This case implemented here to get a guaranteed tailcall
         // Make sure we generate the sequence point outside the scope of the variable
@@ -2686,11 +2694,10 @@ and GenLinearExpr cenv cgbuf eenv sp expr sequel canProcessDebugPoint (contf: Fa
            | NoDebugPointAtStickyBinding -> SPSuppress
     
         // Generate the body
-        GenLinearExpr cenv cgbuf eenv spBody body (EndLocalScope(sequel, endScope)) (* canProcessDebugPoint *) true contf
+        GenLinearExpr cenv cgbuf eenv spBody body (EndLocalScope(sequel, endScope)) true contf
 
     | Expr.Match (spBind, _exprm, tree, targets, m, ty) ->
-        if canProcessDebugPoint then
-            ProcessDebugPointForExpr cenv cgbuf sp expr
+        if preSteps && GenExprPreSteps cenv cgbuf eenv sp expr sequel then contf Fake else
 
         match spBind with
         | DebugPointAtBinding m -> CG.EmitSeqPoint cgbuf m
@@ -2750,16 +2757,16 @@ and GenLinearExpr cenv cgbuf eenv sp expr sequel canProcessDebugPoint (contf: Fa
                 Fake))
 
     | LinearOpExpr (TOp.UnionCase c, tyargs, argsFront, argLast, m) ->
-        if canProcessDebugPoint then
-            ProcessDebugPointForExpr cenv cgbuf sp expr
+        if preSteps && GenExprPreSteps cenv cgbuf eenv sp expr sequel then contf Fake else
 
         GenExprs cenv cgbuf eenv argsFront
-        GenLinearExpr cenv cgbuf eenv SPSuppress argLast Continue (* canProcessDebugPoint *) true (contf << (fun Fake -> 
+        GenLinearExpr cenv cgbuf eenv SPSuppress argLast Continue (* preSteps *) true (contf << (fun Fake -> 
             GenAllocUnionCaseCore cenv cgbuf eenv (c, tyargs, argsFront.Length + 1, m)
             GenSequel cenv eenv.cloc cgbuf sequel
             Fake))
 
     | _ -> 
+        // No longer a linear expression
         GenExpr cenv cgbuf eenv sp expr sequel
         contf Fake
 
@@ -4305,7 +4312,10 @@ and GenStructStateMachine cenv cgbuf eenvouter (templateStructTy, stateVars, thi
     let ilCloTy = mkILValueTy ilCloTypeRef ilCloGenericActuals
 
     // The closure implements what ever interfaces the template implements. TODO: currently limiting to precisely 1 for tasks
-    let interfaceTy = GetImmediateInterfacesOfType SkipUnrefInterfaces.Yes g cenv.amap m templateStructTy |> List.head
+    let interfaceTy =
+        match GetImmediateInterfacesOfType SkipUnrefInterfaces.Yes g cenv.amap m templateStructTy with 
+        | [ity] -> ity
+        | _ -> error(Error(FSComp.SR.structTemplateMustImplementOneInterface(), m))
 
     let ilInterfaceTy = GenType cenv.amap m eenvinner.tyenv interfaceTy
     let attrs = GenAttrs cenv eenvinner cloAttribs
@@ -4331,8 +4341,9 @@ and GenStructStateMachine cenv cgbuf eenvouter (templateStructTy, stateVars, thi
     let setStateMachineMethod =
         let v0, v1, bodyExpr = match setMachineStateBodyExpr with NewDelegateExpr g ([[v0; v1]], e, _) -> v0, v1, e | _ -> failwith "invalid setStateMachineExpr, expected a new delegate of two vars"
         let meth = 
-            InfoReader.TryFindIntrinsicMethInfo infoReader m AccessibilityLogic.AccessorDomain.AccessibleFromSomewhere "SetStateMachine" interfaceTy
-            |> List.head
+            match InfoReader.TryFindIntrinsicMethInfo infoReader m AccessibilityLogic.AccessorDomain.AccessibleFromSomewhere "SetStateMachine" interfaceTy with
+            | [m] when m.IsInstance && m.NumArgs = [1] -> m
+            | _ -> error(Error(FSComp.SR.structTemplateMustImplementOneInterface(), m))
         let argTys = meth.GetParamTypes(cenv.amap, m, [])
         let ilArgTys = argTys |> List.concat |> GenTypes cenv.amap m eenvinner.tyenv
         let eenvinner = eenvinner |> AddStorageForLocalVals g [(v0, Arg 0); (v1, Arg 1)] 

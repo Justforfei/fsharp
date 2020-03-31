@@ -2299,6 +2299,24 @@ and OptimizeLinearExpr cenv env expr contf =
     let expr = if cenv.settings.ExpandStructuralValues() then ExpandStructuralBinding cenv expr else expr 
     let expr = stripExpr expr
 
+    // Matching on 'match __resumableEntry() with ...` is really a first-class lanugage construct which we 
+    // donoptimize separately
+    match expr with 
+    | ResumableEntryMatchExpr cenv.g (noneBranchExpr, someVar, someBranchExpr, rebuild) -> 
+        let noneBranchExprR, e1info = OptimizeExpr cenv env noneBranchExpr 
+        let env = BindInternalValToUnknown cenv someVar env 
+        let someBranchExprR, e2info = OptimizeExpr cenv env someBranchExpr 
+        let exprR = rebuild (noneBranchExprR, someBranchExprR)
+        let infoR = 
+            { TotalSize = e1info.TotalSize + e2info.TotalSize
+              FunctionSize = e1info.FunctionSize + e2info.FunctionSize
+              HasEffect = true
+              MightMakeCriticalTailcall = false
+              Info = UnknownValue }
+        contf (exprR, infoR)
+
+    | _ -> 
+
     match expr with 
     | Expr.Sequential (e1, e2, flag, spSeq, m) -> 
       let e1R, e1info = OptimizeExpr cenv env e1 

@@ -2332,8 +2332,10 @@ val (|ValApp|_|) : TcGlobals -> ValRef -> Expr -> (TypeInst * Exprs * range) opt
 val (|NewDelegateExpr|_|): TcGlobals -> Expr -> (Val list list * Expr * range) option
 
 /// Match 'if __useResumableCode then ... else ...' expressions
-val (|IfGenerateCompiledStateMachinesExpr|_|) : TcGlobals -> Expr -> (Expr * Expr) option
+val (|IfUseResumableCodeExpr|_|) : TcGlobals -> Expr -> (Expr * Expr) option
 
 val isStaticClass: g: TcGlobals -> tcref: TyconRef -> bool
 
 val CombineCcuContentFragments: range -> ModuleOrNamespaceType list -> ModuleOrNamespaceType
+
+val (|ResumableEntryMatchExpr|_|): g: TcGlobals -> Expr -> (Expr * Val * Expr * (Expr * Expr -> Expr)) option

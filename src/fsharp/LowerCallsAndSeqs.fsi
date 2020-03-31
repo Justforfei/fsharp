@@ -21,7 +21,10 @@ val LowerImplFile: g: TcGlobals -> assembly: TypedImplFile -> TypedImplFile
 /// free variables of the sequence expression.
 val ConvertSequenceExprToObject: g: TcGlobals -> amap: ImportMap -> overallExpr: Expr -> (ValRef * ValRef * ValRef * ValRef list * Expr * Expr * Expr * TType * range) option
 
+val IsPossibleSequenceExpr: g: TcGlobals -> overallExpr: Expr -> bool
+
 /// Analyze a TAST expression to detect the elaborated form of a state machine expression, a special kind
 /// of object expression that uses special code generation constructs.
 val ConvertStateMachineExprToObject: g: TcGlobals -> overallExpr: Expr -> (Choice<Expr, ( (* templateStructTy *) TType * (* stateVars *) ValRef list * (* thisVars *) ValRef list * (* moveNextMethodThisVar: *) Val * (* moveNextExprWithJumpTable *) Expr * (* setMachineStateExprR *) Expr * (* afterMethodThisVar: *) Val * (* startExprR *) Expr)>) option
 
+val IsPossibleStateMachineExpr: g: TcGlobals -> overallExpr: Expr -> bool

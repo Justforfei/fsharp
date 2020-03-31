@@ -138,6 +138,15 @@ type LoweredSeqFirstPhaseResult =
 
 let isVarFreeInExpr v e = Zset.contains v (freeInExpr CollectTyparsAndLocals e).FreeLocals
 
+let (|Seq|_|) g expr =
+    match expr with
+    // use 'seq { ... }' as an indicator
+    | ValApp g g.seq_vref ([elemTy], [e], _m) -> Some (e, elemTy)
+    | _ -> None
+
+let IsPossibleSequenceExpr g expr =
+    match expr with Seq g _ -> true | _ -> false
+
 /// Analyze a TAST expression to detect the elaborated form of a sequence expression.
 /// Then compile it to a state machine represented as a TAST containing goto, return and label nodes.
 /// The returned state machine will also contain references to state variables (from internal 'let' bindings),
@@ -205,12 +214,6 @@ let ConvertSequenceExprToObject g amap overallExpr =
     let (|SeqEmpty|_|) expr =
         match expr with
         | ValApp g g.seq_empty_vref (_, [], m) -> Some (m)
-        | _ -> None
-
-    let (|Seq|_|) expr =
-        match expr with
-        // use 'seq { ... }' as an indicator
-        | ValApp g g.seq_vref ([elemTy], [e], _m) -> Some (e, elemTy)
         | _ -> None
 
     /// Implement a decision to represent a 'let' binding as a non-escaping local variable (rather than a state machine variable)
@@ -612,7 +615,7 @@ let ConvertSequenceExprToObject g amap overallExpr =
 
 
     match overallExpr with
-    | Seq(e, ty) ->
+    | Seq g (e, ty) ->
         // printfn "found seq { ... } or Seq.delay (fun () -> ...) in FSharp.Core.dll"
         let m = e.Range
         let initLabel = IL.generateCodeLabel()
@@ -846,42 +849,6 @@ let (|StructStateMachineExpr|_|) g expr =
         Some (templateStructTy, moveNextExpr, setMachineStateExpr, afterMethodExpr)
     | _ -> None
 
-let (|MatchTwoCasesExpr|_|) expr =
-    match expr with 
-    | Expr.Match (_spBind, _exprm, TDSwitch(cond, [ TCase( DecisionTreeTest.UnionCase (ucref, _), TDSuccess ([], tg1) )], Some (TDSuccess ([], tg2)), _), tgs, _m, _ty) -> 
-        Some (cond, ucref, tg1, tg2, tgs)
-    | _ -> None
-
-/// match e with None -> ... | Some v -> ... or other variations of the same
-let (|MatchOptionExpr|_|) expr =
-    match expr with
-    | MatchTwoCasesExpr(cond, ucref, tg1, tg2, tgs) -> 
-        let tgNone, tgSome = if ucref.CaseName = "None" then tg1, tg2 else tg2, tg1
-        match tgs.[tgNone], tgs.[tgSome] with 
-        | TTarget([], noneBranchExpr, _, _), 
-          TTarget([], Expr.Let(TBind(unionCaseVar, Expr.Op(TOp.UnionCaseProof _, _, _, _), _), 
-                               Expr.Let(TBind(someVar, Expr.Op(TOp.UnionCaseFieldGet _, _, _, _), _), someBranchExpr, _, _), _, _), _, _) 
-              when unionCaseVar.LogicalName = "unionCase" -> 
-            Some (cond, noneBranchExpr, someVar, someBranchExpr)
-        | _ -> None
-    | _ -> None
-
-let (|ReentryAppExpr|_|) g expr =
-    match expr with
-    | ValApp g g.cgh__resumableEntry_vref (_, _, _m) -> Some ()
-    | _ -> None
-
-/// Match a use of resumable within a 'match' construct
-let (|ReentryMatchExpr|_|) g expr =
-    match expr with
-    | Expr.Let(TBind(matchVar, matchExpr, _), MatchOptionExpr (Expr.Val(matchVar2, _, _), noneBranchExpr, someVar, someBranchExpr), _, _) ->
-        match matchExpr with 
-        | ReentryAppExpr g () -> 
-            if valRefEq g (mkLocalValRef matchVar) matchVar2 then 
-                Some (noneBranchExpr, someVar, someBranchExpr)
-            else None
-        | _ -> None
-    | _ -> None
 
 let (|ResumeAtExpr|_|) g expr =
     match expr with
@@ -963,27 +930,28 @@ let RepresentBindingAsStateVar (bind: Binding) (res2: StateMachineConversionFirs
 //    (__resumableObject code).Start()
 
 // TODO: this is too adhoc
-let isMustExpandVar (v: Val) = 
-    let nm = v.LogicalName
-    (nm.StartsWith "__expand_" 
-     || nm.StartsWith "builder@" 
-     || (v.BaseOrThisInfo = MemberThisVal)) &&
-    not v.IsCompiledAsTopLevel
-
 let isExpandVar (v: Val) = 
-    isMustExpandVar v
-    || (v.BaseOrThisInfo = MemberThisVal)
+    v.LogicalName.StartsWith "__expand_" 
 
 type env = 
     { 
       Macros: ValMap<Expr>
+      TemplateStructTy: TType option
       //MachineAddrExpr: Expr option 
     }
 
     static member Empty = 
         { Macros = ValMap.Empty
+          TemplateStructTy = None
           //MachineAddrExpr = None 
         }
+
+/// Detect prefix of state machine expressions 
+let rec IsPossibleStateMachineExpr g expr = 
+    match expr with
+    | Expr.Let (macroBind, bodyExpr, _, _) when isExpandVar macroBind.Var -> IsPossibleStateMachineExpr g bodyExpr
+    | IfUseResumableCodeExpr g _ -> true
+    | _ -> false
 
 let ConvertStateMachineExprToObject g overallExpr =
 
@@ -1003,7 +971,7 @@ let ConvertStateMachineExprToObject g overallExpr =
             BindMacros envR bodyExpr
 
         // Eliminate 'if useResumableCode ...'
-        | IfGenerateCompiledStateMachinesExpr g (thenExpr, _) -> 
+        | IfUseResumableCodeExpr g (thenExpr, _) -> 
             if sm_verbose then printfn "eliminating 'if useResumableCode...'" 
             BindMacros env thenExpr
 
@@ -1028,15 +996,16 @@ let ConvertStateMachineExprToObject g overallExpr =
     let rec TryApplyMacroDef (env: env) expr (args: Expr list) = 
         if isNil args then Some expr else
         match expr with 
+        | Expr.TyLambda _ 
         | Expr.Lambda _ -> 
             let m = expr.Range
             let macroTypars, macroParamsCurried, macroBody, _rty = stripTopLambda (expr, tyOfExpr g expr)
             if not (isNil macroTypars) then 
-                error(InternalError(sprintf "macro has typars %A" expr, m))
+                error(Error(FSComp.SR.stateMachineMacroTypars(), m))
             let macroParams = List.concat macroParamsCurried
             let macroVal2 = mkLambdas m macroTypars macroParams (macroBody, tyOfExpr g macroBody)
             if args.Length < macroParams.Length then 
-                error(InternalError(sprintf "under applied macro %A, args = %A " expr args, m))
+                error(Error(FSComp.SR.stateMachineMacroUnderapplied(), m))
             let nowArgs, laterArgs = List.splitAt macroParams.Length args
             let expandedExpr = MakeApplicationAndBetaReduce g (macroVal2, (tyOfExpr g macroVal2), [], nowArgs, m)
             TryApplyMacroDef env expandedExpr laterArgs
@@ -1046,7 +1015,7 @@ let ConvertStateMachineExprToObject g overallExpr =
             let macroParams = List.concat macroParamsCurried
             let macroVal2 = mkLambdas m [] macroParams (macroBody, tyOfExpr g macroBody)
             if args.Length < macroParams.Length then 
-                error(InternalError(sprintf "under applied macro %A, args = %A " expr args, m))
+                error(Error(FSComp.SR.stateMachineMacroUnderapplied(), m))
             let nowArgs, laterArgs = List.splitAt macroParams.Length args
             let expandedExpr = MakeApplicationAndBetaReduce g (macroVal2, (tyOfExpr g macroVal2), [], nowArgs, m)
             TryApplyMacroDef env expandedExpr laterArgs
@@ -1097,9 +1066,11 @@ let ConvertStateMachineExprToObject g overallExpr =
         | _ -> 
             None
 
-    // Apply a single expansion of __expand_ABC and __newEntryPoint in an arbitrary expression
+    // Apply a single expansion of __expand_ABC at the outermost position in an arbitrary expression
     let rec TryExpandMacro (env: env) expr args remake = 
-        if sm_verbose then printfn "checking %A for possible macro application..." expr
+        if sm_verbose then printfn "expanding macros at outermost position for %A..." expr
+        //let (env, expr) = BindMacros env expr
+        //if sm_verbose then printfn "checking %A for possible macro application..." expr
         match expr with
         // __expand_code --> [expand_code]
         | Expr.Val (macroRef, _, _) when env.Macros.ContainsVal macroRef.Deref ->
@@ -1116,9 +1087,10 @@ let ConvertStateMachineExprToObject g overallExpr =
                 match macroDef with 
                 | Expr.Val _ -> Some (remake macroDef)
                 | _ -> 
-                    error(InternalError(sprintf "invalid macro expansion %A = %A" expr macroDef, expr.Range))
+                    error(Error(FSComp.SR.stateMachineMacroInvalidExpansion(), expr.Range))
+                    //error(InternalError(sprintf "invalid macro expansion %A = %A" expr macroDef, expr.Range))
 
-        // __expand_code.Invoke x --> let arg = x in [expand_code][arg/x]
+        // __expand_code.Invoke x --> let arg = x in [__expand_code][arg/x]
         | Expr.App ((Expr.Val (invokeRef, _, _) as iref), a, b, (f :: args2), m) 
                 when invokeRef.LogicalName = "Invoke" && isDelegateTy g (tyOfExpr g f) -> 
             if sm_verbose then printfn "found delegate invoke in possible macro application..." 
@@ -1139,17 +1111,20 @@ let ConvertStateMachineExprToObject g overallExpr =
           IsUnderQuotations=true } 
 
     let ConvertStateMachineLeafExpression (env: env) expr = 
+        if sm_verbose then printfn "ConvertStateMachineLeafExpression for %A..." expr
         expr |> RewriteExpr (makeRewriteEnv env)
 
     let ConvertStateMachineLeafDecisionTree (env: env) expr = 
+        if sm_verbose then printfn "ConvertStateMachineLeafDecisionTree for %A..." expr
         expr |> RewriteDecisionTree (makeRewriteEnv env)
 
     /// Repeatedly find outermost expansion definitions and apply outermost expansions 
     let rec RepeatBindAndApplyOuterMacros (env: env) expr = 
-        let env, expr2 = BindMacros env expr
-        match TryExpandMacro env expr2 [] id with 
-        | Some res -> RepeatBindAndApplyOuterMacros env res
-        | None -> env, expr2
+        if sm_verbose then printfn "RepeatBindAndApplyOuterMacros for %A..." expr
+        let env2, expr2 = BindMacros env expr
+        match TryExpandMacro env2 expr2 [] id with 
+        | Some res -> RepeatBindAndApplyOuterMacros env2 res
+        | None -> env2, expr2
 
     // Detect a reference-type state machine (or an application of a reference type state machine to a method)
     let (|RefStateMachineInContext|_|) (env: env) expr = 
@@ -1170,9 +1145,9 @@ let ConvertStateMachineExprToObject g overallExpr =
     // Detect a state machine with a single method override
     let (|StateMachineInContext|_|) inputExpr = 
         // All true instantiated 'task { .. }' begin with a bind of @builder or '__expand_code' (as opposed to the library definitions of 'Run' etc. which do not)
-        match inputExpr with 
-        | Expr.Let (bind, _, _, _) when isExpandVar bind.Var -> 
-
+        //match inputExpr with 
+        //| Expr.Let (bind, _, _, _) when isExpandVar bind.Var -> 
+        if IsPossibleStateMachineExpr g inputExpr then 
             let env, expr = BindMacros env.Empty inputExpr 
             match expr with
             | RefStateMachineInContext env (env, objExpr, remake) ->
@@ -1182,7 +1157,7 @@ let ConvertStateMachineExprToObject g overallExpr =
                     if sm_verbose then printfn "Found ref state machine object expression..."
                     match overrides with 
                     | [ (TObjExprMethod(slotsig, attribs, methTyparsOfOverridingMethod, methodParams, 
-                             (OptionalResumeAtExpr g (pcExpr, codeExpr)), m)) ] ->
+                             (OptionalResumeAtExpr g (pcExprOpt, codeExpr)), m)) ] ->
                         if sm_verbose then printfn "Found ref state machine override and jump table call..."
                         let env, codeExprR = RepeatBindAndApplyOuterMacros env codeExpr
                         if sm_verbose then printfn "Found ref state machine jump table code lambda..."
@@ -1197,7 +1172,7 @@ let ConvertStateMachineExprToObject g overallExpr =
 
                             Choice1Of2 overallExprR
 
-                        Some (env, remake2, pcExpr, codeExprR, m)
+                        Some (env, remake2, pcExprOpt, codeExprR, m)
                     | _ -> 
                         if sm_verbose then printfn "CONVERSION FAILURE: Didn't find ref state machine override and jump table call..."
                         None
@@ -1206,12 +1181,13 @@ let ConvertStateMachineExprToObject g overallExpr =
                     None
 
             | StructStateMachineInContext env (env, templateStructTy, moveNextExpr, setMachineStateExpr, afterMethodExpr) ->
+                let env = { env with TemplateStructTy = Some templateStructTy }
                 if sm_verbose then printfn "Found struct machine call..."
                 match moveNextExpr, setMachineStateExpr, afterMethodExpr with 
                 | NewDelegateExpr g ([[moveNextMethodThisVar]], moveNextMethodBodyExpr, m), setMachineStateExpr, NewDelegateExpr g ([[afterMethodThisVar]], afterMethodBodyExpr, _) ->
                     if sm_verbose then printfn "Found struct machine lambdas..."
                     match moveNextMethodBodyExpr with 
-                    | OptionalResumeAtExpr g (pcExpr, codeExpr) ->
+                    | OptionalResumeAtExpr g (pcExprOpt, codeExpr) ->
                         if sm_verbose then printfn "Found struct machine jump table call..."
                         let env, codeExprR = RepeatBindAndApplyOuterMacros env codeExpr
                         let setMachineStateExprR = ConvertStateMachineLeafExpression env setMachineStateExpr
@@ -1226,14 +1202,15 @@ let ConvertStateMachineExprToObject g overallExpr =
                                 printfn "----------- AFTER REWRITE afterMethodBodyExprR ----------------------"
                                 printfn "%s" (DebugPrint.showExpr g afterMethodBodyExprR)
                             Choice2Of2 (templateStructTy, stateVars, thisVars, moveNextMethodThisVar, moveNextExprWithJumpTable, setMachineStateExprR, afterMethodThisVar, afterMethodBodyExprR)
-                        Some (env, remake2, pcExpr, codeExprR, m)
+                        Some (env, remake2, pcExprOpt, codeExprR, m)
                 | _ -> 
                     if sm_verbose then printfn "CONVERSION FAILURE: Didn't find struct machine lambdas ...moveNextExpr = %A, afterMethodExpr = %A" moveNextExpr.DebugText afterMethodExpr.DebugText
                     None
             | _ -> 
-                if sm_verbose then printfn "ACCEPTABLE CONVERSION FAILURE: recorded expansions but not a state machine expression at %A" expr.Range
+                //if sm_verbose then printfn "ACCEPTABLE CONVERSION FAILURE: recorded expansions but not a state machine expression at %A" expr.Range
                 None
-        | _ ->
+        else
+            //if sm_verbose then printfn "ACCEPTABLE CONVERSION FAILURE: no prefix for state machine expression at %A" expr.Range
             None
 
     // A utility to add a jump table an expression
@@ -1272,8 +1249,8 @@ let ConvertStateMachineExprToObject g overallExpr =
         // Detect the different permitted constructs in the expanded state machine
         let res = 
             match expr with 
-            | ReentryMatchExpr g (noneBranchExpr, someVar, someBranchExpr) ->
-                if sm_verbose then printfn "ReentryMatchExpr" 
+            | ResumableEntryMatchExpr g (noneBranchExpr, someVar, someBranchExpr, _rebuild) ->
+                if sm_verbose then printfn "ResumableEntryMatchExpr" 
                 // printfn "found sequential"
                 let reenterPC = genPC()
                 let envSome = { env with Macros = env.Macros.Add someVar (mkInt g someVar.Range reenterPC) }
@@ -1315,7 +1292,7 @@ let ConvertStateMachineExprToObject g overallExpr =
                       thisVars = []
                       asyncVars = emptyFreeVars }
                 | _ -> 
-                    error(InternalError(sprintf "target label for __resumeAt was not statically determined. A __resumeAt with a non-static target label may only appear at the start of a resumable code method", pcExpr.Range))
+                    error(Error(FSComp.SR.stateMachineResumeAtTargetNotStatic(), pcExpr.Range))
 
             // The expanded code for state machines may use sequential binding and sequential execution.
             //
@@ -1376,7 +1353,7 @@ let ConvertStateMachineExprToObject g overallExpr =
                 let res2 = ConvertStateMachineCode env pcExprOpt e2
                 let eps = res1.entryPoints @ res2.entryPoints
                 if eps.Length > 0 then 
-                    error(InternalError(sprintf "invalid state machine - try/finally may not contain resumption points", expr.Range))
+                    error(Error(FSComp.SR.stateMachineResumptionInTryFinally(), expr.Range))
                 { phase1 = mkTryFinally g (res1.phase1, res2.phase1, m, ty, sp1, sp2)
                   phase2 = (fun ctxt -> 
                         let egR = res1.phase2 ctxt
@@ -1395,7 +1372,7 @@ let ConvertStateMachineExprToObject g overallExpr =
                 let res3 = ConvertStateMachineCode env pcExprOpt e3
                 let eps = res1.entryPoints @ res2.entryPoints @ res3.entryPoints
                 if eps.Length > 0 then 
-                    error(InternalError(sprintf "invalid state machine - state machine code may not contain asynchronous fast integer for loops", expr.Range))
+                    error(Error(FSComp.SR.stateMachineResumptionForLoop(), expr.Range))
                 { phase1 = mkFor g (sp1, v, res1.phase1, sp2, res2.phase1, res3.phase1, m)
                   phase2 = (fun ctxt -> 
                         let e1R = res1.phase2 ctxt
@@ -1503,23 +1480,31 @@ let ConvertStateMachineExprToObject g overallExpr =
                 let resBody = ConvertStateMachineCode env pcExprOpt bodyExpr
 
                 // The isByrefTy check is an adhoc check to avoid capturing the 'this' parameter of a struct state machine 
-                //    let sm = sm 
+                // You might think we could do this:
+                //
+                //    let sm = &this
                 //    ... await point ...
                 //    ... sm ....
-                // However the 'sm' won't be set on that path :-( 
-                //
-                // TODO: assess whethr we are avoiding capturing the 'this' of reference-type state machines too
+                // However the 'sm' won't be set on that path.
                 if bind.Var.IsCompiledAsTopLevel || not (resBody.asyncVars.FreeLocals.Contains(bind.Var)) || bind.Var.LogicalName.StartsWith "__stack_" then
+                    if sm_verbose then printfn "LetExpr (non-control-flow, rewrite rhs, RepresentBindingAsTopLevelOrLocal)" 
                     RepresentBindingAsTopLevelOrLocal bind resBody m
                 elif isByrefTy g bind.Var.Type then
-                    RepresentBindingAsThis bind resBody m
+                    match env.TemplateStructTy with 
+                    | None -> error(Error(FSComp.SR.stateMachineResumptionByrefInStructMachine(), m))
+                    | Some ty -> 
+                        if typeEquiv g ty (destByrefTy g bind.Var.Type) then
+                            RepresentBindingAsThis bind resBody m
+                        else
+                            error(Error(FSComp.SR.stateMachineResumptionByrefInStructMachine(), m))
                 else
+                    if sm_verbose then printfn "LetExpr (non-control-flow, rewrite rhs, RepresentBindingAsStateVar)" 
                     // printfn "found state variable %s" bind.Var.DisplayName
                     RepresentBindingAsStateVar bind resBody m
 
             // LetRec bindings may not appear as part of state machine.
             | Expr.LetRec _ -> 
-                  error(InternalError(sprintf "recursive bindings not allowed in state machine, please lift it out", expr.Range))
+                  error(Error(FSComp.SR.stateMachineResumptionByrefInStructMachine(), expr.Range))
 
             // Arbitrary expression
             | _ -> 
@@ -1543,42 +1528,46 @@ let ConvertStateMachineExprToObject g overallExpr =
     // Detect a state machine and convert it
     match overallExpr with
     | StateMachineInContext (env, remake, pcExprOpt, codeExpr, m) ->
-        let pcExprROpt = pcExprOpt |> Option.map (ConvertStateMachineLeafExpression env)
+        if (freeInExpr CollectLocals overallExpr).FreeLocals |> Zset.exists isExpandVar then 
+            printfn "Abandoning: Not all macro variables expanded..."
+            None
+        else
+            let pcExprROpt = pcExprOpt |> Option.map (ConvertStateMachineLeafExpression env)
         
-        if sm_verbose then 
-            printfn "Found state machine override method and code expression..."
-            printfn "----------- OVERALL EXPRESSION FOR STATE MACHINE CONVERSION ----------------------"
-            printfn "%s" (DebugPrint.showExpr g overallExpr)
-            printfn "----------- INPUT TO STATE MACHINE CONVERSION ----------------------"
-            printfn "%s" (DebugPrint.showExpr g codeExpr)
-            printfn "----------- START STATE MACHINE CONVERSION ----------------------"
+            if sm_verbose then 
+                printfn "Found state machine override method and code expression..."
+                printfn "----------- OVERALL EXPRESSION FOR STATE MACHINE CONVERSION ----------------------"
+                printfn "%s" (DebugPrint.showExpr g overallExpr)
+                printfn "----------- INPUT TO STATE MACHINE CONVERSION ----------------------"
+                printfn "%s" (DebugPrint.showExpr g codeExpr)
+                printfn "----------- START STATE MACHINE CONVERSION ----------------------"
     
-        // Perform phase1 of the conversion
-        let phase1 = ConvertStateMachineCode env pcExprROpt codeExpr 
+            // Perform phase1 of the conversion
+            let phase1 = ConvertStateMachineCode env pcExprROpt codeExpr 
 
-        // Work out the initial mapping of pcs to labels
-        let pcs = [ 1 .. pcCount ]
-        let labs = pcs |> List.map (fun _ -> IL.generateCodeLabel())
-        let pc2lab  = Map.ofList (List.zip pcs labs)
+            // Work out the initial mapping of pcs to labels
+            let pcs = [ 1 .. pcCount ]
+            let labs = pcs |> List.map (fun _ -> IL.generateCodeLabel())
+            let pc2lab  = Map.ofList (List.zip pcs labs)
 
-        // Execute phase2, building the core of the method
-        if sm_verbose then printfn "----------- PHASE2 ----------------------"
+            // Execute phase2, building the core of the method
+            if sm_verbose then printfn "----------- PHASE2 ----------------------"
 
-        // Perform phase2 to build the final expression
-        let moveNextExprR = phase1.phase2 pc2lab
+            // Perform phase2 to build the final expression
+            let moveNextExprR = phase1.phase2 pc2lab
 
-        if sm_verbose then printfn "----------- ADDING JUMP TABLE ----------------------"
+            if sm_verbose then printfn "----------- ADDING JUMP TABLE ----------------------"
 
-        // Add the jump table
-        let moveNextExprWithJumpTable = 
-            match pcExprROpt with 
-            | None -> moveNextExprR
-            | Some pcExprR -> addPcJumpTable m pcs pc2lab pcExprR moveNextExprR
+            // Add the jump table
+            let moveNextExprWithJumpTable = 
+                match pcExprROpt with 
+                | None -> moveNextExprR
+                | Some pcExprR -> addPcJumpTable m pcs pc2lab pcExprR moveNextExprR
         
-        if sm_verbose then printfn "----------- REMAKE ----------------------"
+            if sm_verbose then printfn "----------- REMAKE ----------------------"
 
-        // Build the result
-        Some (remake (moveNextExprWithJumpTable, phase1.stateVars, phase1.thisVars))
+            // Build the result
+            Some (remake (moveNextExprWithJumpTable, phase1.stateVars, phase1.thisVars))
 
         //printfn "----------- CHECKING ----------------------"
         //let mutable failed = false

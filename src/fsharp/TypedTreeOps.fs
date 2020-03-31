@@ -9036,7 +9036,7 @@ let (|ValApp|_|) g vref expr =
     | Expr.App (Expr.Val (vref2, _, _), _f0ty, tyargs, args, m) when valRefEq g vref vref2 ->  Some (tyargs, args, m)
     | _ -> None
 
-let (|GenerateCompiledStateMachinesExpr|_|) g expr =
+let (|UseResumableCodeExpr|_|) g expr =
     match expr with
     | ValApp g g.cgh__useResumableCode_vref (_, _, _m) -> Some ()
     | _ -> None
@@ -9050,9 +9050,9 @@ let (|IsThenElseExpr|_|) expr =
     | _ -> None
 
 /// if __useResumableCode then ... else ...
-let (|IfGenerateCompiledStateMachinesExpr|_|) g expr =
+let (|IfUseResumableCodeExpr|_|) g expr =
     match expr with
-    | IsThenElseExpr(GenerateCompiledStateMachinesExpr g (), thenExpr, elseExpr) -> Some (thenExpr, elseExpr)
+    | IsThenElseExpr(UseResumableCodeExpr g (), thenExpr, elseExpr) -> Some (thenExpr, elseExpr)
     | _ -> None
 
 let isStaticClass (g:TcGlobals) (x: EntityRef) =
@@ -9128,3 +9128,68 @@ let CombineCcuContentFragments m l =
     CombineModuleOrNamespaceTypeList [] m l
 
 
+let (|MatchTwoCasesExpr|_|) expr =
+    match expr with 
+    | Expr.Match (spBind, exprm, TDSwitch(cond, [ TCase( DecisionTreeTest.UnionCase (ucref, a), TDSuccess ([], tg1) )], Some (TDSuccess ([], tg2)), b), tgs, m, ty) -> 
+
+        // How to rebuild this construct
+        let rebuild (cond, ucref, tg1, tg2, tgs) = 
+            Expr.Match (spBind, exprm, TDSwitch(cond, [ TCase( DecisionTreeTest.UnionCase (ucref, a), TDSuccess ([], tg1) )], Some (TDSuccess ([], tg2)), b), tgs, m, ty)
+
+        Some (cond, ucref, tg1, tg2, tgs, rebuild)
+
+    | _ -> None
+
+/// match e with None -> ... | Some v -> ... or other variations of the same
+let (|MatchOptionExpr|_|) expr =
+    match expr with
+    | MatchTwoCasesExpr(cond, ucref, tg1, tg2, tgs, rebuildTwoCases) -> 
+        let tgNone, tgSome = if ucref.CaseName = "None" then tg1, tg2 else tg2, tg1
+        match tgs.[tgNone], tgs.[tgSome] with 
+        | TTarget([], noneBranchExpr, b1, b2), 
+          TTarget([], Expr.Let(TBind(unionCaseVar, Expr.Op(TOp.UnionCaseProof a1, a2, a3, a4), a5), 
+                               Expr.Let(TBind(someVar, Expr.Op(TOp.UnionCaseFieldGet (a6a, a6b), a7, a8, a9), a10), someBranchExpr, a11, a12), a13, a14), a15, a16) 
+              when unionCaseVar.LogicalName = "unionCase" -> 
+
+            // How to rebuild this construct
+            let rebuild (cond, noneBranchExpr, someVar, someBranchExpr) =
+                let tgs = Array.zeroCreate 2
+                tgs.[tgNone] <- TTarget([], noneBranchExpr, b1, b2)
+                tgs.[tgSome] <- TTarget([], Expr.Let(TBind(unionCaseVar, Expr.Op(TOp.UnionCaseProof a1, a2, a3, a4), a5), 
+                                                    Expr.Let(TBind(someVar, Expr.Op(TOp.UnionCaseFieldGet (a6a, a6b), a7, a8, a9), a10), someBranchExpr, a11, a12), a13, a14), a15, a16)
+                rebuildTwoCases (cond, ucref, tg1, tg2, tgs)
+
+            Some (cond, noneBranchExpr, someVar, someBranchExpr, rebuild)
+  //      // This case is when the var matched by 'Some' has been optimized away
+  //      | TTarget([], noneBranchExpr, _, _), 
+  //        TTarget([], someBranchExpr, _, _)  -> 
+  //          Some (cond, noneBranchExpr, None, someBranchExpr)
+        | _ -> None
+    | _ -> None
+
+let (|ResumableEntryAppExpr|_|) g expr =
+    match expr with
+    | ValApp g g.cgh__resumableEntry_vref (_, _, _m) -> Some ()
+    | _ -> None
+
+/// Match an (unoptimized) __resumableEntry expression
+let (|ResumableEntryMatchExpr|_|) g expr =
+    match expr with
+    | Expr.Let(TBind(matchVar, matchExpr, sp1), MatchOptionExpr (Expr.Val(matchVar2, b, c), noneBranchExpr, someVar, someBranchExpr, rebuildMatch), d, e) ->
+        match matchExpr with 
+        | ResumableEntryAppExpr g () -> 
+            if valRefEq g (mkLocalValRef matchVar) matchVar2 then 
+
+                // How to rebuild this construct
+                let rebuild (noneBranchExpr, someBranchExpr) =
+                    Expr.Let(TBind(matchVar, matchExpr, sp1), rebuildMatch (Expr.Val(matchVar2, b, c), noneBranchExpr, someVar, someBranchExpr), d, e)
+
+                Some (noneBranchExpr, someVar, someBranchExpr, rebuild)
+
+            else None
+
+        | _ -> None
+//        // This case is when the 'let' binding for the matched expression has been optimized into the match
+//    | MatchOptionExpr (ResumableEntryAppExpr g (), noneBranchExpr, someVarOpt, someBranchExpr) ->
+//        Some (noneBranchExpr, someVarOpt, someBranchExpr)
+    | _ -> None
